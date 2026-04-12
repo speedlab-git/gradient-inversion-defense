@@ -1,0 +1,3 @@
+[submodule "vendor/Geminio"]
+	path = vendor/Geminio
+	url = https://github.com/HKU-TASR/Geminio.git

@@ -1,0 +1,50 @@
+defaults:
+  - _default_optimization_attack
+  - _self_
+
+# Deep Leakage from Gradients (Zhu, Liu, Han — NeurIPS 2019)
+# Euclidean gradient matching, no regularization. Pure DLG's L-BFGS is
+# unstable on ResNet18-scale gradient norms (loss explodes to 1e8+ on
+# the first step), so we use Adam + gradient normalization which is the
+# common "DLG with a stable optimizer" variant used in the breaching
+# benchmark. Label recovery: iDLG (Zhao et al., 2020).
+type: DLG
+label_strategy: iDLG
+
+objective:
+  type: euclidean
+  scale: 1.0
+  task_regularization: 0.0
+
+restarts:
+  num_trials: 1
+  scoring: euclidean
+
+init: patterned-4-randn
+normalize_gradients: True
+
+optim:
+  optimizer: adam
+  signed: "soft"
+  step_size: 0.1
+  step_size_decay: cosine-decay
+  boxed: True
+  max_iterations: 24_000
+  langevin_noise: 0.0
+  warmup: 50
+  pixel_decay: 0.0
+  grad_clip:
+  callback: 1000
+
+regularization:
+  group_regular:
+    scale: 0.0
+    totalseeds: 1
+    startIter: 10_000_000
+    updateRegPeriod: 200
+    mode: "lazy"
+    weighted: False
+
+augmentations:
+
+save_dir: "outputs/"

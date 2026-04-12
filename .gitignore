@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# PyTorch models
+*.pt
+*.pth
+*.ckpt
+
+# Data
+data/
+*.npy
+
+# Results (raw outputs — summary tables are tracked)
+results/*/
+!results/attack_sweep_summary/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
