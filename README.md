@@ -10,7 +10,13 @@ Evaluating defense mechanisms against VLM-guided gradient inversion attacks in f
 
 3. **Defense generalizes across multiple GIA algorithms.** Tested against four reconstruction methods — HF-GradInv (Ye et al., 2024), Inverting Gradients (Geiping et al., 2020), GradInversion (Yin et al., 2021), and DLG (Zhu et al., 2019). DP-SGD reduces attack F1 for every functional baseline across both domains.
 
-See [`results/attack_sweep_summary/`](results/attack_sweep_summary/) for full tables.
+Results:
+- [VLM backfire analysis](results/vlm_backfire.md) — loss ratios across VLM variants
+- [Defense comparison](results/defense_comparison.md) — DP-SGD, FedAvg, pruning, noise, VLM robustness
+- [Attack generalization sweep](results/attack_sweep_summary/) — DP-SGD tested against 4 GIA algorithms
+- [Batch size sweep](results/batch_size_sweep.md) — defense margin at batch 8, 16, 32
+- [Analytical argument](results/analytical_argument.md) — why gradient clipping is sufficient (SNR derivation)
+- [Lab notebook](lab_notebook.md) — full experimental chronology and methods
 
 ## Repository structure
 
