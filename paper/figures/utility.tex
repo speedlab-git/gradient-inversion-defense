@@ -1,0 +1,38 @@
+% Test accuracy under NBFU at various epsilon, ChestMNIST classifier-head training.
+\begin{tikzpicture}
+\begin{axis}[
+    width=\columnwidth,
+    height=5cm,
+    xlabel={Privacy budget $\varepsilon$ (log scale)},
+    ylabel={Test accuracy after 10 epochs},
+    xmode=log,
+    log basis x=10,
+    xmin=0.05, xmax=100,
+    ymin=0, ymax=0.65,
+    grid=major,
+    grid style={dashed, gray!30},
+    legend pos=south east,
+    legend style={font=\small, draw=none, fill=white, fill opacity=0.9, text opacity=1},
+    mark size=2.5pt,
+    every axis plot/.append style={line width=1pt},
+    xtick={0.1,1,5,10,50},
+    xticklabels={0.1, 1, 5, 10, 50},
+]
+% NBFU eps sweep accuracy
+\addplot[color=teal!80, mark=*] coordinates {
+    (0.1, 0.2837)
+    (1.0, 0.3395)
+    (5.0, 0.1212)
+    (10.0, 0.5295)
+    (50.0, 0.5313)
+};
+\addlegendentry{NBFU train}
+
+% No-defense baseline (horizontal line)
+\draw[dashed, gray!70, line width=1pt] (axis cs:0.05,0.5251) -- (axis cs:100,0.5251);
+\node[anchor=south west, font=\scriptsize] at (axis cs:0.06,0.53) {no defense (52.5\%)};
+
+% Clip-only baseline (horizontal line)
+\draw[dotted, gray!90, line width=1pt] (axis cs:0.05,0.5277) -- (axis cs:100,0.5277);
+\end{axis}
+\end{tikzpicture}

@@ -80,7 +80,8 @@ SCENES = ['interval5_AMtown01', 'interval5_HKairport01']
 
 
 def train_query(query, device, data_root=DATA_ROOT, scenes=SCENES,
-                epochs=5, batch_size=16, num_workers=4, vlm='clip'):
+                epochs=5, batch_size=16, num_workers=4, vlm='clip',
+                output_dir='./malicious_models_uav'):
     """Train a malicious model for a single UAV query."""
     print(f"\n{'='*60}")
     print(f"Training malicious model for query: \"{query}\"")
@@ -157,10 +158,10 @@ def train_query(query, device, data_root=DATA_ROOT, scenes=SCENES,
             )
 
     # Save model
-    os.makedirs('./malicious_models_uav', exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
     safe_name = query.replace(' ', '_').replace('?', '').replace('"', '')[:60]
     suffix = f'_{vlm}' if vlm != 'clip' else ''
-    model_path = f'./malicious_models_uav/{safe_name}{suffix}.pt'
+    model_path = f'{output_dir}/{safe_name}{suffix}.pt'
     torch.save(model.clf.state_dict(), model_path)
     print(f"Saved malicious model: {model_path}")
 
@@ -218,6 +219,8 @@ def main():
     parser.add_argument('--vlm', type=str, default='clip',
                         choices=['clip', 'simclip4', 'simclip2', 'fare4', 'fare2', 'tecoa4', 'tecoa2'],
                         help='VLM backend for text-image similarity (default: clip)')
+    parser.add_argument('--output-dir', type=str, default='./malicious_models_uav',
+                        help='Directory to save trained malicious classifier head')
     args = parser.parse_args()
 
     device = f'cuda:{args.gpu}' if torch.cuda.is_available() else 'cpu'
@@ -225,13 +228,16 @@ def main():
     if args.all:
         for query in UAV_QUERIES:
             train_query(query, device, data_root=args.data_root,
-                        scenes=args.scenes, epochs=args.epochs, vlm=args.vlm)
+                        scenes=args.scenes, epochs=args.epochs, vlm=args.vlm,
+                        output_dir=args.output_dir)
     elif args.query:
         train_query(args.query, device, data_root=args.data_root,
-                    scenes=args.scenes, epochs=args.epochs, vlm=args.vlm)
+                    scenes=args.scenes, epochs=args.epochs, vlm=args.vlm,
+                    output_dir=args.output_dir)
     else:
         train_query(UAV_QUERIES[0], device, data_root=args.data_root,
-                    scenes=args.scenes, epochs=args.epochs, vlm=args.vlm)
+                    scenes=args.scenes, epochs=args.epochs, vlm=args.vlm,
+                    output_dir=args.output_dir)
 
     print("\n" + "="*60)
     print("Phase 3 (UAV) complete!")

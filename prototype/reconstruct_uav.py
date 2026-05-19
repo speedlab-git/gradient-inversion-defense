@@ -166,19 +166,20 @@ def compute_attack_f1(model, loss_fn, rec_data, true_data, setup, threshold=0.90
     cos_sims = []
     B = rec_data["data"].shape[0]
 
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
     for i in range(B):
         # Per-sample gradient for reconstructed image
         model.zero_grad()
         rec_out = model(rec_data["data"][i:i+1].to(setup["device"]))
         rec_loss = loss_fn(rec_out, true_data["labels"][i:i+1].to(setup["device"]))
-        rec_grads = torch.autograd.grad(rec_loss, model.parameters(), create_graph=False)
+        rec_grads = torch.autograd.grad(rec_loss, trainable_params, create_graph=False)
         rec_grad_flat = rec_grads[-2].flatten()
 
         # Per-sample gradient for ground truth image
         model.zero_grad()
         true_out = model(true_data["data"][i:i+1].to(setup["device"]))
         true_loss = loss_fn(true_out, true_data["labels"][i:i+1].to(setup["device"]))
-        true_grads = torch.autograd.grad(true_loss, model.parameters(), create_graph=False)
+        true_grads = torch.autograd.grad(true_loss, trainable_params, create_graph=False)
         true_grad_flat = true_grads[-2].flatten()
 
         cos_sim = F.cosine_similarity(rec_grad_flat.unsqueeze(0), true_grad_flat.unsqueeze(0)).item()
@@ -196,12 +197,19 @@ def compute_attack_f1(model, loss_fn, rec_data, true_data, setup, threshold=0.90
 def reconstruct_uav(cfg, setup, query=None, prune_rate=0.0, noise_scale=0.0,
                     dpsgd_epsilon=0.0, dpsgd_delta=1e-5, dpsgd_max_grad_norm=1.0,
                     fedavg_epochs=0, fedavg_lr=1e-3,
-                    data_dir='./assets/uav_samples/', model_path=None):
+                    data_dir='./assets/uav_samples/', model_path=None,
+                    freeze_backbone=False):
     """Reconstruct private UAV/drone images using baseline or query-based approach."""
     num_classes = cfg.case.data.classes  # 18
 
     # Initialize model (ResNet18, 18 classes for UAVScenes multi-label)
     model = GeminioResNet18(num_classes=num_classes)
+    if freeze_backbone:
+        for p in model.extractor.parameters():
+            p.requires_grad_(False)
+        n_train = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        n_total = sum(p.numel() for p in model.parameters())
+        print(f"Frozen backbone: shared gradient now spans {n_train:,} params ({n_total:,} total)")
     user, server, model, loss_fn = breaching.cases.construct_case(cfg.case, model, setup)
 
     # CRITICAL: Override loss function to BCEWithLogitsLoss for multi-label
@@ -275,11 +283,12 @@ def reconstruct_uav(cfg, setup, query=None, prune_rate=0.0, noise_scale=0.0,
     if noise_scale > 0:
         print(f"Applying gradient noise defense: Laplacian scale={noise_scale}")
         shared_data["gradients"] = apply_gradient_noise(shared_data["gradients"], noise_scale)
-    if dpsgd_epsilon > 0:
-        print(f"Applying DP-SGD defense: epsilon={dpsgd_epsilon}, delta={dpsgd_delta}, C={dpsgd_max_grad_norm}")
+    if dpsgd_epsilon != 0:
+        eps_arg = None if dpsgd_epsilon < 0 else dpsgd_epsilon
+        print(f"Applying NBFU defense: epsilon={'clip-only' if eps_arg is None else eps_arg}, delta={dpsgd_delta}, C={dpsgd_max_grad_norm}")
         shared_data["gradients"], dpsgd_info = apply_dpsgd(
             shared_data["gradients"],
-            epsilon=dpsgd_epsilon,
+            epsilon=eps_arg,
             delta=dpsgd_delta,
             max_grad_norm=dpsgd_max_grad_norm,
             batch_size=cfg.case.user.num_data_points,
@@ -375,6 +384,10 @@ if __name__ == '__main__':
     parser.add_argument('--attack', type=str, default='hfgradinv',
                         choices=['hfgradinv', 'dlg', 'ig', 'gradinversion'],
                         help='Underlying gradient inversion algorithm applied to Geminio-trapped gradients')
+    parser.add_argument('--bn-train-mode', action='store_true',
+                        help='Run victim in model.train() (BatchNorm uses batch stats) — realism check')
+    parser.add_argument('--freeze-backbone', action='store_true',
+                        help='Set requires_grad=False on ResNet backbone; transmitted gradient covers only the 148K-param head')
     args = parser.parse_args()
 
     # Initialize configuration
@@ -383,6 +396,8 @@ if __name__ == '__main__':
     cfg.case.data.partition = "none"
     cfg.case.data.batch_size = args.num_samples
     cfg.case.user.provide_labels = True  # Will be overridden in reconstruct_uav
+    if args.bn_train_mode:
+        cfg.case.server.provide_public_buffers = False
     cfg.attack.optim['max_iterations'] = args.max_iterations
     if args.attack == 'hfgradinv':
         # HF-GradInv hyperparameters tuned for ResNet18 (Geminio default path)
@@ -402,10 +417,14 @@ if __name__ == '__main__':
         defense_tag += f'_prune{args.prune_rate}'
     if args.noise_scale > 0:
         defense_tag += f'_noise{args.noise_scale}'
-    if args.dpsgd_epsilon > 0:
+    if args.dpsgd_epsilon < 0:
+        defense_tag += '_dpsgd_cliponly'
+    elif args.dpsgd_epsilon > 0:
         defense_tag += f'_dpsgd_eps{args.dpsgd_epsilon}'
     if args.fedavg_epochs > 0:
         defense_tag += f'_fedavg_e{args.fedavg_epochs}_lr{args.fedavg_lr}'
+    if args.freeze_backbone:
+        defense_tag += '_frozen'
     batch_tag = f'_{args.batch_tag}' if args.batch_tag else ''
     cfg.attack.save_dir = f'./results/uav_{query_tag}{attack_tag}{defense_tag}{batch_tag}/'
 
@@ -429,4 +448,5 @@ if __name__ == '__main__':
                      fedavg_epochs=args.fedavg_epochs,
                      fedavg_lr=args.fedavg_lr,
                      data_dir=args.data_dir,
-                     model_path=args.model_path)
+                     model_path=args.model_path,
+                     freeze_backbone=args.freeze_backbone)

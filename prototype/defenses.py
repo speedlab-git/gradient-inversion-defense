@@ -96,35 +96,48 @@ def compute_noise_multiplier(epsilon, delta, sensitivity=1.0):
 
 def apply_dpsgd(gradients, epsilon, delta=1e-5, max_grad_norm=1.0, batch_size=1):
     """
-    Apply DP-SGD defense to shared gradients.
+    Norm-Bounded Federated Update (NBFU) defense.
 
-    Implements the two core steps of DP-SGD (Abadi et al., CCS 2016):
-      1. Gradient clipping: clip the global L2 norm of the gradient to max_grad_norm
-      2. Gaussian noise: add calibrated noise with sigma = max_grad_norm * sqrt(2*ln(1.25/delta)) / epsilon
+    Two-step procedure applied to the client's averaged gradient before sharing:
+      1. Per-update clipping: bound the L2 norm of the entire update to C = max_grad_norm.
+      2. Calibrated Gaussian noise (analytic Gaussian mechanism, Balle & Wang 2018).
 
-    The noise is scaled by 1/batch_size to account for gradient averaging over the batch,
-    matching the standard DP-SGD formulation where noise is added to the average gradient.
+    Privacy semantics. We do NOT clip per-example gradients. The defense
+    provides record-level (ε,δ)-DP \emph{over the shared per-update aggregate},
+    not standard client-level DP. The neighboring relation is "the client
+    substitutes one record in its local batch." Under this relation the L2
+    sensitivity of the clipped update equals 2*C — two clipped vectors can
+    each lie anywhere on the radius-C ball, so they may differ by up to 2C.
+
+    The per-element noise std is therefore:
+        σ = 2 * C * sqrt(2 * ln(1.25/δ)) / ε
+    (Sensitivity 2C, not C. The earlier version of this code used C, which
+    underscaled the noise and failed to deliver the stated (ε,δ) guarantee.)
+
+    For multi-round composition, use a moments accountant or RDP composition
+    over the per-round (ε, δ) budget; this function returns per-round noise.
 
     Args:
-        gradients: List of gradient tensors (the shared gradient update)
-        epsilon: Privacy budget. Common values:
-                   0.1  = very strong privacy (heavy noise, likely destroys utility)
-                   1.0  = strong privacy (significant noise)
+        gradients: List of gradient tensors (the averaged shared update).
+        epsilon: Privacy budget per round. None disables noise (clip-only ablation).
+                   0.1  = very strong privacy (heavy noise)
+                   1.0  = strong privacy
                    5.0  = moderate privacy
-                   10.0 = weak privacy (light noise)
-                   50.0 = very weak privacy (minimal noise, for reference)
-        delta: Failure probability. Should be < 1/n where n = dataset size.
-               Default 1e-5 is suitable for datasets with >100K samples.
-        max_grad_norm: Maximum L2 norm for gradient clipping (C in the DP-SGD paper).
-                       Controls sensitivity. Default 1.0 is standard.
-        batch_size: Number of samples in the batch. Noise is scaled by 1/batch_size.
+                   10.0 = weak privacy
+                   50.0 = very weak privacy (clipping-dominated)
+        delta: Failure probability per round. Default 1e-5.
+        max_grad_norm: Clip bound C. Default 1.0.
+        batch_size: Reported in info dict only; not used in noise calibration.
 
     Returns:
-        List of defended gradient tensors
+        (defended_gradients, info_dict)
 
-    Reference:
+    References:
         Abadi et al., "Deep Learning with Differential Privacy", CCS 2016.
-        Balle & Wang, "Improving the Gaussian Mechanism for Differential Privacy", ICML 2018.
+        Balle & Wang, "Improving the Gaussian Mechanism for Differential Privacy",
+            ICML 2018.
+        McMahan et al., "Learning Differentially Private Recurrent Language Models",
+            ICLR 2018 (client-level DP in FL).
     """
     # Step 1: Gradient clipping (bound the L2 norm)
     clipped = []
@@ -135,15 +148,21 @@ def apply_dpsgd(gradients, epsilon, delta=1e-5, max_grad_norm=1.0, batch_size=1)
     for grad in gradients:
         clipped.append(grad.clone() * clip_factor)
 
-    # Step 2: Add calibrated Gaussian noise
-    sigma = compute_noise_multiplier(epsilon, delta, sensitivity=max_grad_norm)
-    # Scale noise by 1/batch_size (noise is added to the average gradient)
-    noise_std = sigma / batch_size
+    # Step 2: Add calibrated Gaussian noise (skipped when epsilon is None — clip-only ablation)
+    if epsilon is None:
+        sigma = 0.0
+        noise_std = 0.0
+        defended = clipped
+    else:
+        # Per-update clipping with sensitivity 2*C (substitute-one-record neighboring).
+        # No 1/batch_size factor because we do not clip per-example.
+        sigma = compute_noise_multiplier(epsilon, delta, sensitivity=2 * max_grad_norm)
+        noise_std = sigma
 
-    defended = []
-    for grad in clipped:
-        noise = torch.randn_like(grad) * noise_std
-        defended.append(grad + noise)
+        defended = []
+        for grad in clipped:
+            noise = torch.randn_like(grad) * noise_std
+            defended.append(grad + noise)
 
     return defended, {
         'epsilon': epsilon,
@@ -193,8 +212,13 @@ def simulate_fedavg(model, server_payload, custom_data, loss_fn, setup,
     """
     parameters = server_payload["parameters"]
 
-    # Save original server parameters
+    # Save original server parameters AND buffers (BN running_mean/var get
+    # mutated by train-mode forward passes below; we must restore them or the
+    # post-defense gradient metric is computed on a model with adapted BN stats
+    # that artificially align rec/true gradients).
     original_params = [p.clone().detach() for p in parameters]
+    original_buffers = [b.clone().detach() for b in model.buffers()]
+    was_training = model.training
 
     # Move model to device and load server parameters
     model.to(**setup)
@@ -233,10 +257,16 @@ def simulate_fedavg(model, server_payload, custom_data, loss_fn, setup,
         torch.cat([g.flatten() for g in shared_grads]), p=2
     ).item()
 
-    # Restore original server parameters (don't contaminate model state)
+    # Restore original parameters AND buffers, AND training-mode flag, so
+    # subsequent metric computation sees the same model state it would have
+    # seen without FedAvg simulation.
     with torch.no_grad():
-        for param, server_state in zip(model.parameters(), parameters):
-            param.copy_(server_state.to(**setup))
+        for param, snap in zip(model.parameters(), original_params):
+            param.copy_(snap.to(**setup))
+        for buf, snap in zip(model.buffers(), original_buffers):
+            buf.copy_(snap.to(**setup))
+    if not was_training:
+        model.eval()
 
     return shared_grads, {
         'local_epochs': local_epochs,
